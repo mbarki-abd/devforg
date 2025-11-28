@@ -1,6 +1,8 @@
 # Dependencies
 node_modules/
 **/node_modules/
+devforge-agent-api/node_modules/
+devforge-agent-api/dist/
 
 # Build outputs
 dist/
