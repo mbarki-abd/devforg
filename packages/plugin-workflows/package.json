@@ -1,0 +1,20 @@
+{
+  "name": "@devforge/plugin-workflows",
+  "version": "2.0.0",
+  "main": "dist/server/index.js",
+  "types": "dist/server/index.d.ts",
+  "devDependencies": {
+    "@types/node": "^20.10.0",
+    "typescript": "^5.7.3"
+  },
+  "peerDependencies": {
+    "@nocobase/client": ">=1.4.0",
+    "@nocobase/server": ">=1.4.0",
+    "@nocobase/database": ">=1.4.0",
+    "react": "^18.2.0"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "dev": "tsc -w -p tsconfig.json"
+  }
+}

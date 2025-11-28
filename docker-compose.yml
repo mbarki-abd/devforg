@@ -1,0 +1,210 @@
+services:
+  # ============================================
+  # NocoBase Application (DevForge Frontend)
+  # ============================================
+  nocobase:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: devforge/nocobase:2.0.0
+    container_name: devforge-nocobase
+    restart: unless-stopped
+    ports:
+      - "13000:80"
+    environment:
+      # Application
+      APP_ENV: production
+      APP_PORT: 80
+      APP_KEY: ${APP_KEY:-devforge-secret-key-change-in-production}
+
+      # Database
+      DB_DIALECT: postgres
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_DATABASE: ${DB_DATABASE:-devforge}
+      DB_USER: ${DB_USER:-devforge}
+      DB_PASSWORD: ${DB_PASSWORD:-devforge_password}
+      DB_TIMEZONE: ${DB_TIMEZONE:-UTC}
+
+      # Redis
+      REDIS_URL: redis://redis:6379
+
+      # Agent API Connection
+      AGENT_API_URL: http://agent-api:8080
+      AGENT_API_KEY: ${AGENT_API_KEY:-your-secure-api-key}
+
+      # Credential Encryption
+      CREDENTIAL_ENCRYPTION_KEY: ${CREDENTIAL_ENCRYPTION_KEY:-your-32-char-encryption-key}
+
+      # Storage
+      LOCAL_STORAGE_BASE_URL: /storage/uploads
+
+      # Logging
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+    volumes:
+      - nocobase_storage:/app/storage
+      - nocobase_plugins:/app/packages/plugins/@devforge
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - devforge-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:80/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+
+  # ============================================
+  # DevForge Agent API (Execution Backend)
+  # ============================================
+  agent-api:
+    build:
+      context: ../devforge-agent-api
+      dockerfile: Dockerfile
+    image: devforge/agent-api:2.0.0
+    container_name: devforge-agent-api
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    environment:
+      # Server
+      PORT: 8080
+      HOST: 0.0.0.0
+      NODE_ENV: production
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+
+      # Authentication
+      AGENT_API_KEY: ${AGENT_API_KEY:-your-secure-api-key}
+
+      # Redis
+      REDIS_URL: redis://redis:6379
+
+      # CORS
+      CORS_ORIGIN: https://devforge.ilinqsoft.com
+
+      # Claude AI (optional)
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+
+      # Azure (optional)
+      AZURE_CLIENT_ID: ${AZURE_CLIENT_ID:-}
+      AZURE_CLIENT_SECRET: ${AZURE_CLIENT_SECRET:-}
+      AZURE_TENANT_ID: ${AZURE_TENANT_ID:-}
+
+      # GCloud (optional)
+      GOOGLE_APPLICATION_CREDENTIALS: /app/credentials/gcloud-key.json
+    volumes:
+      - agent_credentials:/app/credentials
+      - /var/run/docker.sock:/var/run/docker.sock  # Docker-in-Docker
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - devforge-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health/live"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+  # ============================================
+  # PostgreSQL Database
+  # ============================================
+  postgres:
+    image: postgres:16-alpine
+    container_name: devforge-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${DB_DATABASE:-devforge}
+      POSTGRES_USER: ${DB_USER:-devforge}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-devforge_password}
+      PGDATA: /var/lib/postgresql/data/pgdata
+    volumes:
+      - postgres_data:/var/lib/postgresql/data/pgdata
+      - ./scripts/init-db.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    ports:
+      - "5432:5432"
+    networks:
+      - devforge-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-devforge} -d ${DB_DATABASE:-devforge}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  # ============================================
+  # Redis (Cache & Queue)
+  # ============================================
+  redis:
+    image: redis:7-alpine
+    container_name: devforge-redis
+    restart: unless-stopped
+    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
+    volumes:
+      - redis_data:/data
+    ports:
+      - "6379:6379"
+    networks:
+      - devforge-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ============================================
+  # Nginx Reverse Proxy
+  # ============================================
+  nginx:
+    image: nginx:alpine
+    container_name: devforge-nginx
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx/ssl:/etc/nginx/ssl:ro
+      - nginx_logs:/var/log/nginx
+    depends_on:
+      - nocobase
+      - agent-api
+    networks:
+      - devforge-network
+    healthcheck:
+      test: ["CMD", "nginx", "-t"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+# ============================================
+# Networks
+# ============================================
+networks:
+  devforge-network:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.28.0.0/16
+
+# ============================================
+# Volumes
+# ============================================
+volumes:
+  postgres_data:
+    driver: local
+  redis_data:
+    driver: local
+  nocobase_storage:
+    driver: local
+  nocobase_plugins:
+    driver: local
+  agent_credentials:
+    driver: local
+  nginx_logs:
+    driver: local

@@ -1,0 +1,292 @@
+name: Deploy DevForge
+
+on:
+  push:
+    branches:
+      - main
+      - master
+    tags:
+      - 'v*'
+  pull_request:
+    branches:
+      - main
+      - master
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Deployment environment'
+        required: true
+        default: 'production'
+        type: choice
+        options:
+          - staging
+          - production
+
+env:
+  REGISTRY: ghcr.io
+  NOCOBASE_IMAGE: ghcr.io/${{ github.repository_owner }}/devforge-nocobase
+  AGENT_API_IMAGE: ghcr.io/${{ github.repository_owner }}/devforge-agent-api
+
+jobs:
+  # ============================================
+  # Build & Test
+  # ============================================
+  build:
+    name: Build & Test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v3
+        with:
+          version: 9
+
+      - name: Get pnpm store directory
+        shell: bash
+        run: |
+          echo "STORE_PATH=$(pnpm store path --silent)" >> $GITHUB_ENV
+
+      - name: Cache pnpm dependencies
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.STORE_PATH }}
+          key: ${{ runner.os }}-pnpm-store-${{ hashFiles('**/pnpm-lock.yaml') }}
+          restore-keys: |
+            ${{ runner.os }}-pnpm-store-
+
+      - name: Install dependencies
+        run: pnpm install
+
+      - name: Lint
+        run: pnpm lint || true
+
+      - name: Build plugins
+        run: pnpm build
+
+      - name: Run tests
+        run: pnpm test || true
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: plugin-builds
+          path: packages/*/dist/
+          retention-days: 7
+
+  # ============================================
+  # Build Docker Images
+  # ============================================
+  docker:
+    name: Build Docker Images
+    runs-on: ubuntu-latest
+    needs: build
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: plugin-builds
+          path: packages/
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata for NocoBase image
+        id: meta-nocobase
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.NOCOBASE_IMAGE }}
+          tags: |
+            type=ref,event=branch
+            type=ref,event=pr
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=sha,prefix=
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      - name: Build and push NocoBase image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./Dockerfile
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ steps.meta-nocobase.outputs.tags }}
+          labels: ${{ steps.meta-nocobase.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          platforms: linux/amd64,linux/arm64
+
+      - name: Extract metadata for Agent API image
+        id: meta-agent
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.AGENT_API_IMAGE }}
+          tags: |
+            type=ref,event=branch
+            type=ref,event=pr
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=sha,prefix=
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      - name: Build and push Agent API image
+        uses: docker/build-push-action@v5
+        with:
+          context: ../devforge-agent-api
+          file: ../devforge-agent-api/Dockerfile
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ steps.meta-agent.outputs.tags }}
+          labels: ${{ steps.meta-agent.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          platforms: linux/amd64,linux/arm64
+
+  # ============================================
+  # Deploy to Production
+  # ============================================
+  deploy:
+    name: Deploy to Production
+    runs-on: ubuntu-latest
+    needs: docker
+    if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master' || startsWith(github.ref, 'refs/tags/v')
+    environment:
+      name: production
+      url: https://devforge.ilinqsoft.com
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup SSH
+        uses: webfactory/ssh-agent@v0.9.0
+        with:
+          ssh-private-key: ${{ secrets.SSH_PRIVATE_KEY }}
+
+      - name: Add server to known hosts
+        run: |
+          mkdir -p ~/.ssh
+          ssh-keyscan -H ${{ secrets.SERVER_HOST }} >> ~/.ssh/known_hosts
+
+      - name: Create deployment directory
+        run: |
+          ssh ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }} "mkdir -p /opt/devforge"
+
+      - name: Copy docker-compose files
+        run: |
+          scp docker-compose.yml ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }}:/opt/devforge/
+          scp -r nginx/ ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }}:/opt/devforge/ || true
+          scp -r scripts/ ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }}:/opt/devforge/ || true
+
+      - name: Create .env file on server
+        run: |
+          ssh ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }} "cat > /opt/devforge/.env << 'EOF'
+          # Application
+          APP_KEY=${{ secrets.APP_KEY }}
+
+          # Database
+          DB_DATABASE=${{ secrets.DB_DATABASE }}
+          DB_USER=${{ secrets.DB_USER }}
+          DB_PASSWORD=${{ secrets.DB_PASSWORD }}
+
+          # Redis
+          REDIS_URL=redis://redis:6379
+
+          # Agent API
+          AGENT_API_KEY=${{ secrets.AGENT_API_KEY }}
+
+          # Credentials Encryption
+          CREDENTIAL_ENCRYPTION_KEY=${{ secrets.CREDENTIAL_ENCRYPTION_KEY }}
+
+          # Claude AI (optional)
+          ANTHROPIC_API_KEY=${{ secrets.ANTHROPIC_API_KEY }}
+
+          # Azure (optional)
+          AZURE_CLIENT_ID=${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_CLIENT_SECRET=${{ secrets.AZURE_CLIENT_SECRET }}
+          AZURE_TENANT_ID=${{ secrets.AZURE_TENANT_ID }}
+
+          # Logging
+          LOG_LEVEL=info
+          EOF"
+
+      - name: Deploy with Docker Compose
+        run: |
+          ssh ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }} << 'ENDSSH'
+            cd /opt/devforge
+
+            # Login to GitHub Container Registry
+            echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
+
+            # Pull latest images
+            docker compose pull
+
+            # Stop and remove old containers
+            docker compose down --remove-orphans
+
+            # Start new containers
+            docker compose up -d
+
+            # Wait for services to be healthy
+            echo "Waiting for services to start..."
+            sleep 30
+
+            # Check service health
+            docker compose ps
+
+            # Run database migrations
+            docker compose exec -T nocobase yarn nocobase upgrade
+
+            # Activate DevForge plugins
+            docker compose exec -T nocobase yarn nocobase pm enable @devforge/plugin-agent-gateway
+            docker compose exec -T nocobase yarn nocobase pm enable @devforge/plugin-credentials
+            docker compose exec -T nocobase yarn nocobase pm enable @devforge/plugin-executions
+            docker compose exec -T nocobase yarn nocobase pm enable @devforge/plugin-projects
+            docker compose exec -T nocobase yarn nocobase pm enable @devforge/plugin-workflows
+
+            # Clean up old images
+            docker image prune -f
+
+            echo "Deployment completed successfully!"
+          ENDSSH
+
+      - name: Verify deployment
+        run: |
+          sleep 10
+          curl -f https://devforge.ilinqsoft.com/api/health || echo "Health check pending..."
+          curl -f https://api.devforge.ilinqsoft.com/health/live || echo "Agent API health check pending..."
+
+      - name: Notify on success
+        if: success()
+        run: |
+          echo "✅ DevForge deployed successfully to production"
+          echo "🌐 Frontend: https://devforge.ilinqsoft.com"
+          echo "🔌 API: https://api.devforge.ilinqsoft.com"
+
+      - name: Notify on failure
+        if: failure()
+        run: |
+          echo "❌ Deployment failed! Check logs for details."

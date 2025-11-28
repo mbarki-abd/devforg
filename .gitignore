@@ -1,0 +1,72 @@
+# Dependencies
+node_modules/
+**/node_modules/
+
+# Build outputs
+dist/
+**/dist/
+lib/
+**/lib/
+build/
+
+# Environment files
+.env
+.env.local
+.env.*.local
+!.env.example
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+pnpm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*.sublime-*
+
+# OS files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Test coverage
+coverage/
+.nyc_output/
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+.cache/
+
+# SSL certificates (should be managed securely)
+nginx/ssl/*.key
+nginx/ssl/*.crt
+nginx/ssl/*.pem
+
+# Credentials
+credentials/
+*.pem
+*.key
+
+# Playwright
+playwright-report/
+playwright/.cache/
+test-results/
+
+# Lock files (keep pnpm-lock.yaml)
+package-lock.json
+yarn.lock
+
+# TypeScript
+*.tsbuildinfo

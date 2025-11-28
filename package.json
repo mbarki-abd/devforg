@@ -1,0 +1,33 @@
+{
+  "name": "@devforge/plugins",
+  "version": "2.0.0",
+  "private": true,
+  "workspaces": [
+    "packages/*"
+  ],
+  "scripts": {
+    "build": "pnpm -r build",
+    "dev": "pnpm -r dev",
+    "test": "pnpm -r test",
+    "lint": "eslint packages --ext .ts,.tsx",
+    "clean": "pnpm -r exec rm -rf dist node_modules"
+  },
+  "devDependencies": {
+    "@nocobase/client": "^1.4.0",
+    "@nocobase/server": "^1.4.0",
+    "@nocobase/database": "^1.4.0",
+    "@nocobase/actions": "^1.4.0",
+    "@playwright/test": "^1.57.0",
+    "@types/node": "^20.10.0",
+    "@types/react": "^18.2.0",
+    "@types/react-dom": "^18.2.0",
+    "@types/ws": "^8.18.1",
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0",
+    "typescript": "^5.7.3"
+  },
+  "engines": {
+    "node": ">=20.0.0",
+    "pnpm": ">=9.0.0"
+  }
+}
